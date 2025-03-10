@@ -1111,20 +1111,74 @@ class Font_Protection_Plugin {
      * Handle Elementor font upload
      */
     public function handle_elementor_font($font_id, $font_data, $meta) {
-        $this->log('info', 'Elementor Font', $font_data['font_face'], "Elementor font uploaded with ID: {$font_id}");
+        $this->log('info', 'Elementor Font', isset($font_data['font_face']) ? $font_data['font_face'] : 'Unknown', "Elementor font uploaded with ID: {$font_id}");
         
-        // Schedule immediate restoration
-        $this->schedule_rapid_checks();
+        // Run restoration immediately instead of scheduling
+        $this->restore_fonts(true);
+        
+        // Clear Elementor cache specifically
+        if (class_exists('\Elementor\Plugin')) {
+            \Elementor\Plugin::instance()->files_manager->clear_cache();
+        }
+        
+        // CRITICAL: Update the font URL in Elementor's database
+        $this->update_elementor_font_url($font_id, $font_data);
     }
     
     /**
-     * Handle Bricks Builder font save
+     * Update Elementor's stored font URL in the database
      */
-    public function handle_bricks_font($font_id, $font_data) {
-        $this->log('info', 'Bricks Font', $font_data['family'] ?? 'Unknown', "Bricks font saved with ID: {$font_id}");
+    public function update_elementor_font_url($font_id, $font_data) {
+        // Extract the font URL(s) from the font data
+        $font_urls = [];
         
-        // Schedule immediate restoration
-        $this->schedule_rapid_checks();
+        if (isset($font_data['font_face'])) {
+            if (is_array($font_data['font_face'])) {
+                $font_urls = $font_data['font_face'];
+            } else {
+                $font_urls[] = $font_data['font_face'];
+            }
+        }
+        
+        // Process each URL
+        foreach ($font_urls as $url) {
+            $attachment_id = $this->get_attachment_id_from_url($url);
+            if (!$attachment_id) {
+                continue;
+            }
+            
+            // Get the local URL
+            $fixed_url = $this->fix_font_url($url, $attachment_id);
+            if ($fixed_url === $url) {
+                continue; // No change needed
+            }
+            
+            // Update Elementor's font data in post meta
+            $meta_key = '_elementor_font_files';
+            $current_data = get_post_meta($font_id, $meta_key, true);
+            
+            if (is_array($current_data)) {
+                foreach ($current_data as $key => $value) {
+                    // Update main font URL
+                    if (isset($value['url']) && $value['url'] === $url) {
+                        $current_data[$key]['url'] = $fixed_url;
+                    }
+                    
+                    // Also check variations
+                    if (isset($value['variations']) && is_array($value['variations'])) {
+                        foreach ($value['variations'] as $var_key => $variation) {
+                            if (isset($variation['url']) && $variation['url'] === $url) {
+                                $current_data[$key]['variations'][$var_key]['url'] = $fixed_url;
+                            }
+                        }
+                    }
+                }
+                
+                // Save the updated data
+                update_post_meta($font_id, $meta_key, $current_data);
+                $this->log('success', 'Elementor URL Updated', basename($url), "Updated Elementor font URL in database");
+            }
+        }
     }
     
     /**
@@ -1140,16 +1194,24 @@ class Font_Protection_Plugin {
             return $attachment[0];
         }
         
-        // Try to extract the filename from the URL
-        $filename = basename($url);
+        // Extract filename without query string
+        $filename = basename(parse_url($url, PHP_URL_PATH));
         
-        // Search for attachments by filename
+        // Try a more flexible search for the filename
         $attachment = $wpdb->get_col($wpdb->prepare("
             SELECT p.ID
             FROM $wpdb->posts p
             WHERE p.post_type = 'attachment'
-            AND (p.post_name = %s OR p.guid LIKE %s)
-        ", pathinfo($filename, PATHINFO_FILENAME), '%' . $filename));
+            AND (
+                p.post_name = %s 
+                OR p.guid LIKE %s
+            )
+            ORDER BY p.ID DESC
+            LIMIT 1
+        ", 
+        pathinfo($filename, PATHINFO_FILENAME), 
+        '%' . $filename
+        ));
         
         if (!empty($attachment)) {
             return $attachment[0];
@@ -1858,10 +1920,12 @@ class Font_Protection_Plugin {
      * Schedule rapid checks for font restoration - Reduced to single check
      */
     public function schedule_rapid_checks() {
-        // Schedule only one check after 10 seconds instead of multiple checks
+        // Run restoration immediately instead of scheduling it
+        $this->restore_fonts(true);
+        
+        // Also schedule a follow-up check just to be safe
         if (!wp_next_scheduled('fontprotect_restore_fonts')) {
-            wp_schedule_single_event(time() + 10, 'fontprotect_restore_fonts');
-            $this->log('info', 'Rapid Check', 'System', 'Scheduled single font restoration check');
+            wp_schedule_single_event(time() + 5, 'fontprotect_restore_fonts');
         }
     }
     
