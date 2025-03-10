@@ -5,7 +5,7 @@
  * Replace the entire plugin file with this code to ensure all issues are fixed.
  * This version:
  * 1. Only processes actual font files, not other media
- * 2. Completely excludes SVG files
+ * 2. Now includes SVG files for protection
  * 3. Minimizes Cloudflare R2 requests
  * 4. Maintains basic font protection functionality
  */
@@ -34,8 +34,8 @@ define('FONTPROTECT_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('FONTPROTECT_ASSETS_URL', FONTPROTECT_PLUGIN_URL . 'assets/');
 
 class Font_Protection_Plugin {
-    // Define font extensions to protect - explicitly excluding SVG
-    private $font_extensions = ['ttf', 'woff', 'woff2', 'eot', 'otf'];
+    // Define font extensions to protect - now including SVG
+    private $font_extensions = ['ttf', 'woff', 'woff2', 'eot', 'otf', 'svg'];
     
     // Logging levels
     private $log_levels = [
@@ -749,6 +749,9 @@ class Font_Protection_Plugin {
                                         case 'otf':
                                             echo 'OpenType Font';
                                             break;
+                                        case 'svg':
+                                            echo 'SVG Font';
+                                            break;
                                         default:
                                             echo ucfirst($ext) . ' Font';
                                     }
@@ -757,7 +760,6 @@ class Font_Protection_Plugin {
                             </div>
                         <?php endforeach; ?>
                     </div>
-                    <p><strong>Note:</strong> SVG fonts are intentionally not supported to avoid conflicts with regular SVG files.</p>
                 </div>
                 
                 <p class="submit">
@@ -1296,6 +1298,9 @@ class Font_Protection_Plugin {
                         break;
                     case 'otf':
                         $format = 'opentype';
+                        break;
+                    case 'svg':
+                        $format = 'svg';
                         break;
                 }
                 
@@ -2050,6 +2055,21 @@ class Font_Protection_Plugin {
             
             // Schedule a scan
             $this->schedule_rapid_checks();
+        }
+    }
+    
+    /**
+     * Handle Bricks font upload
+     */
+    public function handle_bricks_font($font_id, $font_data) {
+        $this->log('info', 'Bricks Font', 'Unknown', "Bricks font uploaded with ID: {$font_id}");
+        
+        // Run restoration immediately instead of scheduling
+        $this->restore_fonts(true);
+        
+        // Clear Bricks cache specifically
+        if (class_exists('\Bricks\Helpers')) {
+            \Bricks\Helpers::delete_cached_css_files();
         }
     }
     
